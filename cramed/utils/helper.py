@@ -125,13 +125,30 @@ def ntkl(logits_student, logits_teacher, target, mask=None, criterion4=None, tem
 
 
 def train_network_distill(stu_type, tea_model, epochs, loader, net, device, optimizer, args, tea, stu):
+    '''
+    loader: dict of dataloader for train, val and test
+    tea_model: the pre-trained teacher model
+    net: the student model to be trained
+    tea, stu: the proxies for teacher and student model respectively
+    '''
+
     save_model = True
-    val_best_acc, test_best_acc, val_best_acc_t, test_best_acc_t = 0, 0, 0, 0
+    # best acc for student and teacher model respectively
+    val_best_acc, test_best_acc, val_best_acc_t, test_best_acc_t = 0, 0, 0, 0 
+
     model_best = net
+    # KL散度损失函数
     criterion = torch.nn.CrossEntropyLoss()
+
+    # criterion3 所有的样本的平均值，一个单一的数值
     criterion3 = torch.nn.KLDivLoss(reduction='batchmean')
+
+    # criterion4 每个样本的KL散度值，返回一个向量，长度等于batch_size
     criterion4 = torch.nn.KLDivLoss(reduction='none')
+
+    # 初始化wandb，记录训练过程中的loss和acc等指标
     wandb.init(project="my-project")
+
     iter = 0
 
     for epoch in range(epochs):
@@ -150,13 +167,21 @@ def train_network_distill(stu_type, tea_model, epochs, loader, net, device, opti
         loss1, loss2, loss_s2t, loss_t2s, loss_ang = 0, 0, 0, 0, 0
         for i, data in enumerate(loader['train']):
             iter = iter + 1
+
+            # cln应该是clean的意思？？
             img_inputs_cln, aud_inputs_cln, labels = data['image'], data['audio'], data['label']
             img_inputs_cln, aud_inputs_cln, labels = img_inputs_cln.to(device), aud_inputs_cln.to(device), labels.to(
                 device)
 
             if stu_type == 0:
+                # outputs : 学生的soft_label outputs_128 : 倒数第二层的特征输出 
                 outputs, outputs_128, stu_fit = net(img_inputs_cln)
+
+                # pseu_label : 教师的soft_label 但为啥是pseu？？？
                 pseu_label, pseu_label_128, tea_fit = tea_model(aud_inputs_cln)
+
+                # tea_fit : 教师的中间特征，输入tea得到logit
+                # stu_fit : 学生的中间特征，输入stu得到logit
                 tea_logits = tea(tea_fit)
                 stu_logits = stu(stu_fit)
             elif stu_type == 1:
@@ -168,17 +193,21 @@ def train_network_distill(stu_type, tea_model, epochs, loader, net, device, opti
                 raise ValueError("Undefined training type in distilled training")
 
 
+            # ？？？？
             optimizer.zero_grad()
+            # 计算学生和教师的交叉熵损失
             XE_s = F.cross_entropy(outputs, labels, reduction='none')
             XE_t = F.cross_entropy(pseu_label, labels, reduction='none')
 
+            # 老师soft_labels 和 proxy teacher logits的损失
             kl_loss_t_t_im = criterion3(F.log_softmax(tea_logits, -1), F.softmax(pseu_label.detach(), dim=-1))
             kl_loss_t_im_t = criterion3(F.log_softmax(pseu_label, -1), F.softmax(tea_logits.detach(), dim=-1))
 
-
+            # 学生soft_labels 和 proxy student logits的损失
             kl_loss_s_s_im = criterion3(F.log_softmax(stu_logits, -1), F.softmax(outputs.detach(), dim=-1))
             kl_loss_s_im_s = criterion3(F.log_softmax(outputs, -1), F.softmax(stu_logits.detach(), dim=-1))
 
+            # 计算KRC
             kendall = np.empty(tea_logits.size(0))
             for i in range(tea_logits.size(0)):
                 temp = \
@@ -187,6 +216,8 @@ def train_network_distill(stu_type, tea_model, epochs, loader, net, device, opti
             kendall = torch.from_numpy(kendall).cuda()
             kendall_mean = kendall.mean()
             bar = sorted(kendall)[int(kendall.size(0) * 0.5) - 1]
+
+            # arg.krc: KRC阈值用于筛选
             mask = torch.where(kendall > args.krc, 1, 0)
             # mask2 = torch.where(kendall > 0.2, 1, 0)
             mask_num = mask.sum()
@@ -197,9 +228,11 @@ def train_network_distill(stu_type, tea_model, epochs, loader, net, device, opti
                 kl_loss_st_s_t = 0
                 kl_loss_st_t_s = 0
             else:
+                # 计算学生和教师之间的互相KL散度损失，此时的loss是proxy之间的non-target
                 kl_loss_st_s_t = ntkl(stu_logits, tea_logits.detach(), labels, mask, criterion4)
                 kl_loss_st_t_s = ntkl(tea_logits, stu_logits.detach(), labels, mask, criterion4)
 
+            # 计算总损失并更新权重 tmp1: teacher tmp2: student
             tmp1 = XE_t.mean() + kl_loss_t_t_im + kl_loss_st_t_s + kl_loss_t_im_t
             tmp2 = XE_s.mean() + kl_loss_s_s_im + kl_loss_st_s_t + kl_loss_s_im_s
             loss = tmp1 + tmp2
@@ -213,6 +246,7 @@ def train_network_distill(stu_type, tea_model, epochs, loader, net, device, opti
             corr_num += mask_num.item()
 
         if epoch >= 80:
+            # 评估学生和教师模型在训练集、验证集和测试集上的性能，并记录指标到wandb
             _, train_acc = evaluate(loader['train'], device, net, stu_type)
             val_loss, val_acc = evaluate(loader['val'], device, net, stu_type)
             test_loss, test_acc = evaluate(loader['test'], device, net, stu_type)

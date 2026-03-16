@@ -17,9 +17,12 @@ def set_random_seed(seed):
     torch.cuda.manual_seed_all(seed)
 
 def eval_overlap_tag(loader, device, args):
+    # 0 -> image 
+    # 1 -> audio
     stu_type = args.stu_type
     tea_type = 1 - stu_type
     # load teacher model
+    # audio and visual model -> resnet18
     tea_model = ImageNet(args).to(device) if tea_type == 0 else AudioNet(args).to(device)
     if stu_type == 1:
         arch = args.image_arch
@@ -27,11 +30,16 @@ def eval_overlap_tag(loader, device, args):
     elif stu_type == 0:
         arch = args.audio_arch
         print(f'teacher:audio ({args.audio_arch}); student:image({args.image_arch})')
+        # 加载teacher的预训练权重pkl
     tea_model.load_state_dict(torch.load('./results/teacher_mod_' + str(tea_type) + '_' + str(args.num_frame) + '_overlap.pkl', map_location={"cuda:0": "cpu"}), strict=False)
 
+    # net是student的model？怎么这么命名
     net = ImageNet(args).to(device) if stu_type == 0 else AudioNet(args).to(device)
+    # 初始化proxies
     tea = Tea().cuda()
     stu = Stu().cuda()
+
+    # 用于更新权重
     optimizer = torch.optim.SGD([
             {'params': net.parameters()},
             {'params': tea_model.parameters()},

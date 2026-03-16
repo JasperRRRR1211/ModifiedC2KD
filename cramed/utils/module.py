@@ -98,6 +98,8 @@ class Shake(nn.Module):
         return x
 
 
+# Tea & Stu都是proxy
+
 class Tea(nn.Module):
     """Convolutional regression for FitNet (feature-map layer)"""
 
@@ -117,7 +119,11 @@ class Tea(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, tea):
+
+        # 将resnet的第四层特征提取出来
+        # tea：一个张量列表，包含了resnet的五层特征图，tea[4]是第四层的特征图
         x = self.avgpool(tea[4])
+
         x = self.layer(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)

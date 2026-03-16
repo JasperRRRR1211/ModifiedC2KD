@@ -101,6 +101,7 @@ class ResNet(nn.Module):
         if self.pool == 'avgpool':
             self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
+            # fc层输入维度是512 * block.expansion，输出维度是num_classes
             self.fc = nn.Linear(512 * block.expansion, num_classes)  # 8192
 
         # if modality == 'audio':
@@ -154,6 +155,7 @@ class ResNet(nn.Module):
 
     def forward(self, x):
         if self.modality == 'visual':
+            # 压缩一个视频的维度，将(B, C, T, H, W)变成(B, C*T, H, W)，以适应resnet的输入要求
             (B, C, T, H, W) = x.size()
             x = x.permute(0, 2, 1, 3, 4).contiguous()
             x = x.view(B, C * T, H, W)
